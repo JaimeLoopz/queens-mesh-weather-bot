@@ -26,14 +26,20 @@ These notes reflect my current Debian setup — adjust paths/permissions for you
 Channel
 Set CHANNEL = 1 (main broadcasts) or 2 (testing) — used in --ch-index
 Coordinates
+
 Already set for Queens, NY (40.6815, -73.8365) — edit LAT, LON if needed
 Logs
+
 Automatically created at ~/logs/weather.log
+
 Facts file
 Create/edit weather_facts.txt in the repo folder (one line per fact).
 If missing → falls back to defaults like "Queens owns the mesh 👑"
+
 Cron job (automatic broadcasts every 60 minutes)
 Open crontab:Bashcrontab -eAdd this line (adjust path if your repo is elsewhere):text*/60 * * * * cd /home/jaimeloopz/queens-mesh-weather-bot && python3 queens_weather_bot.py >> /home/jaimeloopz/logs/cron_weather.log 2>&1
+
+
 Serial permissions (if you get access errors)
 Add your user to the dialout group:Bashsudo usermod -aG dialout $USER
 
