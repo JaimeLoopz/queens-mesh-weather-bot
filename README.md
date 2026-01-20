@@ -13,15 +13,16 @@ Reliable, offline moon phase, wind arrows, alerts — no wttr.in dependency.
 - Random facts from `weather_facts.txt`
 
 ## Setup Notes
+
 These notes reflect my current Debian setup — adjust paths/permissions for your environment.
 
 - **Serial port**  
   Change `SERIAL_PORT = "/dev/ttyUSB0"` at the top of the script to match your Meshtastic node.  
-  Check with:  
+  Check connected devices with:  
   ```bash
   ls /dev/ttyUSB*
   dmesg | grep tty
-  
+
 Channel
 Set CHANNEL = 1 (main broadcasts) or 2 (testing) — used in --ch-index
 Coordinates
@@ -31,16 +32,10 @@ Automatically created at ~/logs/weather.log
 Facts file
 Create/edit weather_facts.txt in the repo folder (one line per fact).
 If missing → falls back to defaults like "Queens owns the mesh 👑"
-
-Cron job (automatic broadcasts every 60 min)
-crontab -e
-
-Add this line (adjust path if your repo is elsewhere):
-*/60 * * * * cd /home/jaimeloopz/queens-mesh-weather-bot && python3 queens_weather_bot.py >> /home/jaimeloopz/logs/cron_weather.log 2>&1
-
+Cron job (automatic broadcasts every 60 minutes)
+Open crontab:Bashcrontab -eAdd this line (adjust path if your repo is elsewhere):text*/60 * * * * cd /home/jaimeloopz/queens-mesh-weather-bot && python3 queens_weather_bot.py >> /home/jaimeloopz/logs/cron_weather.log 2>&1
 Serial permissions (if you get access errors)
-Add your user to the dialout group:
-sudo usermod -aG dialout $USER
+Add your user to the dialout group:Bashsudo usermod -aG dialout $USER
 
 ## Quick Start
 ```bash
