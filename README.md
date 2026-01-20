@@ -12,6 +12,24 @@ Reliable, offline moon phase, wind arrows, alerts — no wttr.in dependency.
 - Auto-truncates >220 char messages for Meshtastic
 - Random facts from `weather_facts.txt`
 
+## Setup Notes
+These notes reflect my current Debian setup — adjust paths/permissions for your environment.
+
+Serial port
+Change SERIAL_PORT = "/dev/ttyUSB0" at the top of the script to match your Meshtastic node.
+Check with: ls /dev/ttyUSB* or dmesg | grep tty
+Channel
+Set CHANNEL = 1 (main broadcasts) or 2 (testing) — used in --ch-index
+Coordinates
+Already set for Queens, NY (40.6815, -73.8365) — edit LAT, LON if needed
+Logs
+Automatically created at ~/logs/weather.log
+Facts file
+Create/edit weather_facts.txt in the repo folder (one line per fact).
+Missing → falls back to defaults
+Cron job (automatic broadcasts every 60 min)
+
+
 ## Quick Start
 ```bash
 git clone https://github.com/JaimeLoopz/queens-mesh-weather-bot
@@ -23,3 +41,4 @@ python3 queens_weather_bot.py test
 
 # Broadcast to mesh
 python3 queens_weather_bot.py
+
