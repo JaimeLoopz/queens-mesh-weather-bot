@@ -28,8 +28,8 @@ Set CHANNEL = 1 (main broadcasts) or 2 (testing) — used in --ch-index
 Coordinates
 
 Already set for Queens, NY (40.6815, -73.8365) — edit LAT, LON if needed
-Logs
 
+Logs
 Automatically created at ~/logs/weather.log
 
 Facts file
