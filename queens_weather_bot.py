@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Queens Mesh Weather Bot - Open-Meteo Version (Updated Jan 2026)
-With tiered cold/hot alerts, soft-test on alt channel, wind dir, moon phase, etc.
+With tiered alerts, conditional facts, sunrise/sunset messages 30 min before, soft-test flags, etc.
 """
 import os
 import sys
@@ -18,10 +18,11 @@ from datetime import datetime, timedelta
 parser = argparse.ArgumentParser(description="Queens Mesh Weather Bot")
 parser.add_argument("--test", action="store_true", help="Dry-run mode (print only)")
 parser.add_argument("--test-send", action="store_true", help="Test mode with real send")
+parser.add_argument("--sunrise", action="store_true", help="Send sunrise message")
+parser.add_argument("--sunset", action="store_true", help="Send sunset message")
 parser.add_argument("--channel", type=int, default=1, help="Meshtastic channel index (default: 1)")
 args = parser.parse_args()
 
-# Override global channel if specified
 CHANNEL = args.channel
 
 # ────────────────────────────────────────────────
@@ -39,17 +40,18 @@ MESHTASTIC_CMD = [
     "--sendtext"
 ]
 
-# Open-Meteo config
-LAT, LON = 40.6815, -73.8365  # Queens, NY
+# Open-Meteo config (includes daily sunrise/sunset/forecast)
+LAT, LON = 40.6815, -73.8365
 METEO_URL = (
     f"https://api.open-meteo.com/v1/forecast"
     f"?latitude={LAT}&longitude={LON}"
     f"&current=temperature_2m,apparent_temperature,wind_speed_10m,wind_direction_10m,"
     f"relative_humidity_2m,pressure_msl,weather_code"
+    f"&daily=sunrise,sunset,temperature_2m_max,temperature_2m_min,weather_code"
     f"&temperature_unit=fahrenheit&wind_speed_unit=mph&pressure_unit=hPa"
+    f"&timezone=America%2FNew_York"
 )
 
-# Weather code to emoji map
 WEATHER_ICONS = {
     0: "☀️", 1: "🌤️", 2: "⛅", 3: "☁️",
     45: "🌫", 48: "🌫",
@@ -61,7 +63,6 @@ WEATHER_ICONS = {
     56: "🌨️", 57: "🌨️", 66: "🌧❄️", 67: "🌧❄️",
 }
 
-# Wind direction emojis
 WIND_ARROWS = [
     "↓", "↙", "←", "↖", "↑", "↗", "→", "↘",
     "↓", "↙", "←", "↖", "↑", "↗", "→", "↘"
@@ -84,14 +85,37 @@ def log(msg):
 def load_facts():
     try:
         with open(FACTS_FILE, "r", encoding="utf-8") as f:
-            facts = [line.strip() for line in f if line.strip()]
-        return facts if facts else ["Queens owns the mesh 👑"]
+            lines = [line.strip() for line in f if line.strip()]
+        cold_facts = []
+        hot_facts = []
+        rain_facts = []
+        wind_facts = []
+        snow_facts = []
+        humidity_facts = []
+        general_facts = []
+        for line in lines:
+            cleaned = line.rstrip(",.;").strip()
+            if line.startswith("[cold]"):
+                cold_facts.append(cleaned.replace("[cold]", "").strip())
+            elif line.startswith("[hot]"):
+                hot_facts.append(cleaned.replace("[hot]", "").strip())
+            elif line.startswith("[rain]"):
+                rain_facts.append(cleaned.replace("[rain]", "").strip())
+            elif line.startswith("[wind]"):
+                wind_facts.append(cleaned.replace("[wind]", "").strip())
+            elif line.startswith("[snow]"):
+                snow_facts.append(cleaned.replace("[snow]", "").strip())
+            elif line.startswith("[humidity]"):
+                humidity_facts.append(cleaned.replace("[humidity]", "").strip())
+            else:
+                general_facts.append(cleaned)
+        return cold_facts, hot_facts, rain_facts, wind_facts, snow_facts, humidity_facts, general_facts
     except FileNotFoundError:
         log("Facts file missing — using fallback")
-        return ["Queens weather = best weather ❤️"]
+        return [], [], [], [], [], [], ["Queens owns the mesh 👑"]
     except Exception as e:
         log(f"Error loading facts: {e}")
-        return ["Mesh loves you back ❤️"]
+        return [], [], [], [], [], [], ["Mesh loves you back ❤️"]
 
 def get_moon_phase(dt=None):
     if dt is None:
@@ -113,20 +137,23 @@ def get_moon_phase(dt=None):
     return "🌑"
 
 def get_weather_data():
-    log("Fetching weather from Open-Meteo")
+    log("Fetching weather + daily forecast from Open-Meteo")
     try:
         r = requests.get(METEO_URL, timeout=30)
         r.raise_for_status()
-        data = r.json()["current"]
-        code = data["weather_code"]
+        data = r.json()
+        current = data["current"]
+        daily = data["daily"]
+
+        code = current["weather_code"]
         icon = WEATHER_ICONS.get(code, "☁️")
 
-        temp = round(data["temperature_2m"])
-        feels = round(data["apparent_temperature"])
-        wind_speed = round(data["wind_speed_10m"])
-        wind_dir_deg = data.get("wind_direction_10m", 0)
-        hum = round(data["relative_humidity_2m"])
-        press_hpa = data["pressure_msl"]
+        temp = round(current["temperature_2m"])
+        feels = round(current["apparent_temperature"])
+        wind_speed = round(current["wind_speed_10m"])
+        wind_dir_deg = current.get("wind_direction_10m", 0)
+        hum = round(current["relative_humidity_2m"])
+        press_hpa = current["pressure_msl"]
         press_inhg = round(press_hpa * 0.02953, 2)
 
         idx = round(wind_dir_deg / 22.5) % 16
@@ -134,31 +161,49 @@ def get_weather_data():
 
         moon = get_moon_phase()
 
+        today_idx = 0
+        tomorrow_idx = 1
+        sunrise_today_str = daily["sunrise"][today_idx]
+        sunset_today_str = daily["sunset"][today_idx]
+        sunrise_today = datetime.fromisoformat(sunrise_today_str)
+        sunset_today = datetime.fromisoformat(sunset_today_str)
+
+        pre_sunrise = sunrise_today - timedelta(minutes=30)
+        pre_sunset = sunset_today - timedelta(minutes=30)
+
+        temp_max_today = round(daily["temperature_2m_max"][today_idx])
+        temp_min_today = round(daily["temperature_2m_min"][today_idx])
+        forecast_code_today = daily["weather_code"][today_idx]
+        forecast_icon_today = WEATHER_ICONS.get(forecast_code_today, "☁️")
+
+        temp_max_tomorrow = round(daily["temperature_2m_max"][tomorrow_idx])
+        temp_min_tomorrow = round(daily["temperature_2m_min"][tomorrow_idx])
+        forecast_code_tomorrow = daily["weather_code"][tomorrow_idx]
+        forecast_icon_tomorrow = WEATHER_ICONS.get(forecast_code_tomorrow, "☁️")
+
         raw = f"{icon}|{temp}°F|{feels}°F|{wind_speed}mph {wind_arrow}|{hum}%|{press_inhg:.2f} inHg|{moon}"
-        log("Success: Got weather from Open-Meteo")
+        log("Success: Got weather data")
         with open(CACHE_FILE, "w", encoding="utf-8") as f:
             f.write(raw)
-        return raw
+        return raw, pre_sunrise, pre_sunset, sunrise_today, sunset_today, temp_max_today, temp_min_today, forecast_icon_today, temp_max_tomorrow, temp_min_tomorrow, forecast_icon_tomorrow
     except Exception as e:
         log(f"Open-Meteo failed: {e}")
-
-    if os.path.exists(CACHE_FILE):
-        age = datetime.now() - datetime.fromtimestamp(os.path.getmtime(CACHE_FILE))
-        if age < timedelta(hours=4):
-            try:
-                with open(CACHE_FILE, "r", encoding="utf-8") as f:
-                    return f.read().strip()
-            except Exception as e:
-                log(f"Cache read failed: {e}")
-    log("No usable weather data")
-    return None
+        if os.path.exists(CACHE_FILE):
+            age = datetime.now() - datetime.fromtimestamp(os.path.getmtime(CACHE_FILE))
+            if age < timedelta(hours=4):
+                try:
+                    with open(CACHE_FILE, "r", encoding="utf-8") as f:
+                        return f.read().strip(), None, None, None, None, None, None, None, None, None, None
+                except Exception as e:
+                    log(f"Cache read failed: {e}")
+        log("No usable weather data")
+        return None, None, None, None, None, None, None, None, None, None, None
 
 def parse_weather(raw):
     parts = raw.split("|")
     if len(parts) != 7:
         return None
     icon, temp, feels, wind, hum, press, moon = (p.strip() for p in parts)
-
     try:
         temp_num = int(temp.replace("°F", ""))
         feels_num = int(feels.replace("°F", ""))
@@ -169,15 +214,12 @@ def parse_weather(raw):
         hum_num = int(hum.replace("%", ""))
     except ValueError:
         return None
-
     return icon, temp, feels, wind, hum, press, moon, wind_speed, feels_num, hum_num, wind_arrow
 
 def get_status(feels_num, hum_num, icon, wind, hum, wind_speed):
-    # Priority: Wind > Cold > Hot > Humidity > Precip > Snow
     if wind_speed > 25:
         return f"WINDY 🌬️ {wind} — hold onto your hat!"
 
-    # Tiered COLD alerts
     if feels_num < -20:
         return f"DANGEROUS COLD 🥶 Feels like {feels_num}°F — frostbite in <10 min! Stay indoors!"
     elif feels_num < 0:
@@ -187,7 +229,6 @@ def get_status(feels_num, hum_num, icon, wind, hum, wind_speed):
     elif feels_num < 32:
         return f"CHILLY 🥶 Feels like {feels_num}°F — layer up and stay warm!"
 
-    # Tiered HOT alerts
     if feels_num > 130:
         return f"EXTREME HEAT DANGER 🔥 Feels like {feels_num}°F — heatstroke in minutes! Seek AC now!"
     elif feels_num > 105:
@@ -197,16 +238,13 @@ def get_status(feels_num, hum_num, icon, wind, hum, wind_speed):
     elif feels_num > 80:
         return f"HEAT CAUTION 🔥 Feels like {feels_num}°F — fatigue risk. Drink water, take breaks!"
 
-    # Humidity (only if not already triggered by heat)
     if hum_num > 80:
         return f"HUMID & STICKY 💧 {hum} — muggy out there"
 
-    # Rain (exact match)
     rain_icons = {"🌧", "🌦", "⛈️", "☔", "🌧🌧"}
     if icon in rain_icons:
         return "RAIN COMING ☔ Stay dry, Queens!"
 
-    # Snow (only if cold enough)
     if any(x in icon for x in ["❄️", "🌨"]) and feels_num <= 32:
         return "SNOW ALERT ❄️ Bundle up!"
 
@@ -224,6 +262,30 @@ def build_message(icon, temp, wind, hum, press, moon, status, fact):
     if len(msg) > 220:
         msg = msg[:210] + "… [trunc]"
         log(f"Message truncated to {len(msg)} chars")
+    return msg
+
+def build_sunrise_message(sunrise_time, temp_max_today, temp_min_today, forecast_icon_today, fact):
+    msg = (
+        f"Queens Sunrise 🌅\n"
+        f"Sunrise at {sunrise_time.strftime('%-l:%M %p')}\n"
+        f"Today's forecast: {forecast_icon_today} High {temp_max_today}°F Low {temp_min_today}°F\n"
+        f"{fact}"
+    )
+    if len(msg) > 220:
+        msg = msg[:210] + "… [trunc]"
+        log(f"Sunrise message truncated to {len(msg)} chars")
+    return msg
+
+def build_sunset_message(sunset_time, temp_max_tomorrow, temp_min_tomorrow, forecast_icon_tomorrow, fact):
+    msg = (
+        f"Queens Sunset 🌇\n"
+        f"Sunset at {sunset_time.strftime('%-l:%M %p')}\n"
+        f"Tomorrow's forecast: {forecast_icon_tomorrow} High {temp_max_tomorrow}°F Low {temp_min_tomorrow}°F\n"
+        f"{fact}"
+    )
+    if len(msg) > 220:
+        msg = msg[:210] + "… [trunc]"
+        log(f"Sunset message truncated to {len(msg)} chars")
     return msg
 
 def send_to_mesh(message):
@@ -247,7 +309,7 @@ def send_to_mesh(message):
 # ────────────────────────────────────────────────
 def main():
     try:
-        raw = get_weather_data()
+        raw, pre_sunrise, pre_sunset, sunrise_today, sunset_today, temp_max_today, temp_min_today, forecast_icon_today, temp_max_tomorrow, temp_min_tomorrow, forecast_icon_tomorrow = get_weather_data()
         if not raw:
             return
         parsed = parse_weather(raw)
@@ -256,15 +318,43 @@ def main():
             return
         icon, temp, feels, wind, hum, press, moon, wind_speed, feels_num, hum_num, wind_arrow = parsed
         status = get_status(feels_num, hum_num, icon, wind, hum, wind_speed)
-        fact = random.choice(load_facts())
-        message = build_message(icon, temp, wind, hum, press, moon, status, fact)
-        send_to_mesh(message)
+
+        # Conditional fact selection
+        cold_facts, hot_facts, rain_facts, wind_facts, snow_facts, humidity_facts, general_facts = load_facts()
+        if feels_num < 32:
+            fact = random.choice(cold_facts or general_facts)
+        elif feels_num > 85:
+            fact = random.choice(hot_facts or general_facts)
+        elif wind_speed > 15:
+            fact = random.choice(wind_facts or general_facts)
+        elif icon in {"🌧", "🌦", "⛈️", "☔", "🌧🌧"}:
+            fact = random.choice(rain_facts or general_facts)
+        elif any(x in icon for x in ["❄️", "🌨"]) and feels_num <= 32:
+            fact = random.choice(snow_facts or general_facts)
+        elif hum_num > 80:
+            fact = random.choice(humidity_facts or general_facts)
+        else:
+            fact = random.choice(general_facts)
+
+        now = datetime.now()
+
+        if args.test:
+            dry_run_test()
+        elif args.sunrise:
+            message = build_sunrise_message(sunrise_today, temp_max_today, temp_min_today, forecast_icon_today, fact)
+            send_to_mesh(message)
+        elif args.sunset:
+            message = build_sunset_message(sunset_today, temp_max_tomorrow, temp_min_tomorrow, forecast_icon_tomorrow, fact)
+            send_to_mesh(message)
+        else:
+            message = build_message(icon, temp, wind, hum, press, moon, status, fact)
+            send_to_mesh(message)
     except Exception as e:
         log(f"Unexpected error in main: {e}")
 
 def dry_run_test():
     print("\n=== DRY RUN TEST (no real send) ===\n")
-    raw = get_weather_data()
+    raw, pre_sunrise, pre_sunset, sunrise_today, sunset_today, temp_max_today, temp_min_today, forecast_icon_today, temp_max_tomorrow, temp_min_tomorrow, forecast_icon_tomorrow = get_weather_data()
     if not raw:
         print("No weather data available")
         return
@@ -274,9 +364,29 @@ def dry_run_test():
         return
     icon, temp, feels, wind, hum, press, moon, wind_speed, feels_num, hum_num, wind_arrow = parsed
     status = get_status(feels_num, hum_num, icon, wind, hum, wind_speed)
-    fact = random.choice(load_facts())
+
+    cold_facts, hot_facts, rain_facts, wind_facts, snow_facts, humidity_facts, general_facts = load_facts()
+    if feels_num < 32:
+        fact = random.choice(cold_facts or general_facts)
+    elif feels_num > 85:
+        fact = random.choice(hot_facts or general_facts)
+    elif wind_speed > 15:
+        fact = random.choice(wind_facts or general_facts)
+    elif icon in {"🌧", "🌦", "⛈️", "☔", "🌧🌧"}:
+        fact = random.choice(rain_facts or general_facts)
+    elif any(x in icon for x in ["❄️", "🌨"]) and feels_num <= 32:
+        fact = random.choice(snow_facts or general_facts)
+    elif hum_num > 80:
+        fact = random.choice(humidity_facts or general_facts)
+    else:
+        fact = random.choice(general_facts)
+
     message = build_message(icon, temp, wind, hum, press, moon, status, fact)
     print(message)
+    if sunrise_today:
+        print(f"\nSunrise preview (30 min before {sunrise_today.strftime('%-l:%M %p')}):\n{build_sunrise_message(sunrise_today, temp_max_today, temp_min_today, forecast_icon_today, fact)}")
+    if sunset_today:
+        print(f"\nSunset preview (30 min before {sunset_today.strftime('%-l:%M %p')}):\n{build_sunset_message(sunset_today, temp_max_tomorrow, temp_min_tomorrow, forecast_icon_tomorrow, fact)}")
     print(f"\nLength: {len(message)} chars")
     print(f"Channel would be: {CHANNEL}")
     print("\n=== END DRY RUN ===\n")
